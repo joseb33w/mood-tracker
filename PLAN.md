@@ -1,49 +1,33 @@
 # Goal
 
-Build a separate Mood Tracker SPA with email/password auth and an emoji-based daily log. After signing in, the user sees five emoji buttons (😀 😐 😢 😡 😴) and a horizontal row showing the last 7 days' moods. The main UI is gated behind authentication — unauthenticated visitors only see the sign-in / sign-up screen.
+Make the mood tracker more interactive by letting users:
+
+1. Optionally jot a short note when they log a mood (typed input above the emoji row).
+2. Tap any day in the 7-day history strip to expand a detail panel showing that day's mood, time, and note.
+
+Both interactions add depth without breaking the existing single-tap-to-log flow.
 
 # Files to touch
 
-- `package.json`, `vite.config.js`, `index.html` — Vite + React app scaffold.
-- `src/main.jsx`, `src/App.jsx` — entry + auth-gated root.
-- `src/components/AuthScreen.jsx` — sign-in / sign-up tabs (email + password).
-- `src/components/Tracker.jsx` — main UI with 5 mood buttons and 7-day history row.
-- `src/lib/supabase.js` — shared Supabase client (reads `VITE_` env vars).
-- `src/lib/moods.js` — mood option config + date helpers (`lastNDays`, `dayKey`, `pickLatestPerDay`).
-- `src/styles.css` — polished purple/violet theme.
-- `.env.example`, `.env` (gitignored) — Supabase URL + anon key + table name.
-- `README.md` — setup instructions.
+- `src/components/Tracker.jsx` — add note state + input, expand history cells into buttons with a selectable detail panel, pass the note on insert, include `note` in SELECT.
+- `src/lib/moods.js` — no API change needed; `pickLatestPerDay` already returns whole rows (with `note` once selected).
+- `src/styles.css` — styles for the new note input, history-cell button affordance, and detail panel.
+- `README.md` — document the schema column add and the new behavior.
 
-# Backend
+## Backend
 
-Single Supabase table `public."usr_nmexs7bytxq2_moods"`:
-
-- `id uuid primary key default gen_random_uuid()`
-- `user_id text not null` — matches `auth.uid()::text`
-- `mood text not null` — one of `happy | neutral | sad | angry | tired`
-- `created_at timestamptz not null default now()`
-
-RLS enabled. Single policy `auth_user_access` scoped to `auth.uid()::text = user_id` for all CRUD on the `authenticated` role. Explicit `GRANT` to `authenticated` and `service_role`. Composite index on `(user_id, created_at DESC)` for the 7-day history query.
+- Added column `note text` (nullable) to `public."usr_nmexs7bytxq2_moods"` via Supabase `exec_sql` RPC. No new RLS policy needed — the existing `auth_user_access` policy covers all columns.
 
 # Verification approach
 
-1. Apply schema via `exec_sql` RPC and confirm the table is reachable via PostgREST.
-2. Drive a real headless-browser flow with Playwright in `/workspace/verify/`:
-   - Boot the built app served from `dist/` on a local port.
-   - Verify unauthenticated visitor sees the AuthScreen, NOT the tracker UI.
-   - Sign up a fresh test user (unique email per run).
-   - Sign in → assert the tracker UI renders, 5 emoji buttons present, 7 history cells render.
-   - Click a mood, assert the matching cell in the history row updates AND a row exists in Supabase.
-   - Sign out and assert we're back at the AuthScreen.
-3. RLS positive + negative: sign up a second user via SDK and confirm their `select` returns zero rows for the first user's data.
-4. Clean up — delete the two test users via service-role admin API.
-5. Build, upload `dist/` to R2 under `<BUILD_ID>/`, smoke-test the preview URL with `curl -I`.
+- **Typecheck/lint**: project has no tsconfig and no lint script, skip pre-flight static checks.
+- **Backend**: as a freshly-created test Supabase user, insert a mood with a note via PostgREST, then SELECT and assert the note round-trips. Insert one without a note and assert null. Confirm `auth.uid()`-scoped RLS still rejects another user's read.
+- **Frontend (Playwright)**: sign up a fresh test user, type a note, tap a mood, assert the history cell for today shows the right emoji, click the cell, assert the detail panel shows the note text. Take screenshots before/after.
+- Clean up the test user with the service-role admin API at the end.
 
 # Out of scope
 
-- Mood editing or deletion UI (only "log the latest mood per day" — re-tapping replaces today's entry visually but each tap is a separate row).
-- Notes / timestamps / journaling.
-- Streak counters or analytics beyond the 7-day strip.
-- Social sharing.
-- Push notifications.
-- Multi-device push of mood logs (Supabase auto-syncs via RLS reads on refresh; no realtime channel).
+- Editing or deleting past mood entries.
+- Note length limits beyond a soft cap (we'll cap at 280 chars client-side; backend stays unconstrained for forward compatibility).
+- Search/filter on notes.
+- Multiple notes per day surfaced (we keep the existing "latest per day" semantics; the detail panel shows the latest entry's note, matching the strip).
