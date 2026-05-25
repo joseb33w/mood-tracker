@@ -9,6 +9,27 @@ import {
   pickLatestPerDay
 } from '../lib/moods.js';
 
+const NOTE_MAX = 280;
+
+function formatTime(iso) {
+  try {
+    return new Date(iso).toLocaleTimeString(undefined, {
+      hour: 'numeric',
+      minute: '2-digit'
+    });
+  } catch {
+    return '';
+  }
+}
+
+function formatLongDay(date) {
+  return date.toLocaleDateString(undefined, {
+    weekday: 'long',
+    month: 'short',
+    day: 'numeric'
+  });
+}
+
 export default function Tracker({ session }) {
   const user = session.user;
   const [moods, setMoods] = useState([]);
@@ -17,6 +38,8 @@ export default function Tracker({ session }) {
   const [logging, setLogging] = useState(null);
   const [logError, setLogError] = useState('');
   const [confirmKey, setConfirmKey] = useState(null);
+  const [note, setNote] = useState('');
+  const [selectedDay, setSelectedDay] = useState(null);
 
   const loadMoods = useCallback(async () => {
     setLoadError('');
@@ -25,7 +48,7 @@ export default function Tracker({ session }) {
     since.setHours(0, 0, 0, 0);
     const { data, error } = await supabase
       .from(MOODS_TABLE)
-      .select('id, mood, created_at')
+      .select('id, mood, note, created_at')
       .eq('user_id', user.id)
       .gte('created_at', since.toISOString())
       .order('created_at', { ascending: false });
@@ -48,18 +71,30 @@ export default function Tracker({ session }) {
   const todayKey = dayKey(new Date());
   const todayLog = latestByDay.get(todayKey) ?? null;
 
+  const selectedEntry = selectedDay ? latestByDay.get(selectedDay) ?? null : null;
+  const selectedDate = selectedDay
+    ? week.find((d) => dayKey(d) === selectedDay) ?? null
+    : null;
+
   async function logMood(moodKey) {
     setLogError('');
     setLogging(moodKey);
     try {
+      const trimmed = note.trim();
+      const payload = {
+        user_id: user.id,
+        mood: moodKey,
+        note: trimmed ? trimmed.slice(0, NOTE_MAX) : null
+      };
       const { data, error } = await supabase
         .from(MOODS_TABLE)
-        .insert({ user_id: user.id, mood: moodKey })
-        .select('id, mood, created_at')
+        .insert(payload)
+        .select('id, mood, note, created_at')
         .single();
       if (error) throw error;
       setMoods((prev) => [data, ...prev]);
       setConfirmKey(moodKey);
+      setNote('');
       setTimeout(() => setConfirmKey(null), 1400);
     } catch (err) {
       setLogError(err.message || 'Failed to log mood.');
@@ -68,9 +103,15 @@ export default function Tracker({ session }) {
     }
   }
 
+  function toggleSelectedDay(k) {
+    setSelectedDay((prev) => (prev === k ? null : k));
+  }
+
   async function signOut() {
     await supabase.auth.signOut();
   }
+
+  const remaining = NOTE_MAX - note.length;
 
   return (
     <div className="app-shell">
@@ -95,6 +136,27 @@ export default function Tracker({ session }) {
               ? `Logged today as ${MOOD_BY_KEY[todayLog.mood]?.emoji ?? '🙂'}. Tap again to update.`
               : 'Tap one to log your mood for today.'}
           </p>
+
+          <label className="note-field">
+            <span className="note-label-row">
+              <span className="note-label">Add a note <span className="note-optional">(optional)</span></span>
+              <span
+                className={`note-counter ${remaining < 0 ? 'over' : ''}`}
+                data-testid="note-counter"
+              >
+                {remaining}
+              </span>
+            </span>
+            <textarea
+              className="note-input"
+              value={note}
+              onChange={(e) => setNote(e.target.value.slice(0, NOTE_MAX))}
+              placeholder="What's on your mind?"
+              rows={2}
+              maxLength={NOTE_MAX}
+              data-testid="note-input"
+            />
+          </label>
 
           <div className="mood-row" role="group" aria-label="Mood options" data-testid="mood-row">
             {MOOD_OPTIONS.map((m) => {
@@ -152,17 +214,31 @@ export default function Tracker({ session }) {
                 const m = latestByDay.get(k);
                 const mood = m ? MOOD_BY_KEY[m.mood] : null;
                 const isToday = k === todayKey;
+                const isSelected = k === selectedDay;
+                const hasNote = !!m?.note;
                 return (
-                  <li key={k} className={`history-cell ${isToday ? 'today' : ''} ${mood ? 'has-mood' : 'empty'}`}>
-                    <div
-                      className="history-emoji"
-                      data-testid={`history-emoji-${k}`}
-                      data-mood={m?.mood ?? ''}
-                      aria-label={mood ? `${shortDayLabel(d)}: ${mood.label}` : `${shortDayLabel(d)}: no entry`}
+                  <li
+                    key={k}
+                    className={`history-cell ${isToday ? 'today' : ''} ${mood ? 'has-mood' : 'empty'} ${isSelected ? 'selected' : ''}`}
+                  >
+                    <button
+                      type="button"
+                      className="history-cell-btn"
+                      onClick={() => toggleSelectedDay(k)}
+                      aria-pressed={isSelected}
+                      aria-label={mood ? `${shortDayLabel(d)}: ${mood.label}${hasNote ? ' (note)' : ''}` : `${shortDayLabel(d)}: no entry`}
+                      data-testid={`history-cell-${k}`}
                     >
-                      {mood ? mood.emoji : '·'}
-                    </div>
-                    <div className="history-label">{shortDayLabel(d)}</div>
+                      <span
+                        className="history-emoji"
+                        data-testid={`history-emoji-${k}`}
+                        data-mood={m?.mood ?? ''}
+                      >
+                        {mood ? mood.emoji : '·'}
+                        {hasNote && <span className="note-dot" aria-hidden="true" />}
+                      </span>
+                      <span className="history-label">{shortDayLabel(d)}</span>
+                    </button>
                   </li>
                 );
               })}
@@ -173,6 +249,53 @@ export default function Tracker({ session }) {
             <p className="history-empty" data-testid="history-empty">
               No moods yet — tap an emoji above to start your streak.
             </p>
+          )}
+
+          {selectedDate && (
+            <div className="day-detail" role="region" aria-label="Selected day details" data-testid="day-detail">
+              <div className="day-detail-header">
+                <span className="day-detail-date">{formatLongDay(selectedDate)}</span>
+                <button
+                  type="button"
+                  className="day-detail-close"
+                  onClick={() => setSelectedDay(null)}
+                  aria-label="Close day details"
+                  data-testid="day-detail-close"
+                >
+                  ✕
+                </button>
+              </div>
+              {selectedEntry ? (
+                <div className="day-detail-body">
+                  <div className="day-detail-mood">
+                    <span className="day-detail-emoji" aria-hidden="true">
+                      {MOOD_BY_KEY[selectedEntry.mood]?.emoji ?? '🙂'}
+                    </span>
+                    <div className="day-detail-meta">
+                      <span className="day-detail-label">
+                        {MOOD_BY_KEY[selectedEntry.mood]?.label ?? selectedEntry.mood}
+                      </span>
+                      <span className="day-detail-time">
+                        Logged at {formatTime(selectedEntry.created_at)}
+                      </span>
+                    </div>
+                  </div>
+                  {selectedEntry.note ? (
+                    <p className="day-detail-note" data-testid="day-detail-note">
+                      {selectedEntry.note}
+                    </p>
+                  ) : (
+                    <p className="day-detail-note empty" data-testid="day-detail-note-empty">
+                      No note for this entry.
+                    </p>
+                  )}
+                </div>
+              ) : (
+                <p className="day-detail-empty" data-testid="day-detail-empty">
+                  No mood logged on this day.
+                </p>
+              )}
+            </div>
           )}
         </section>
       </main>

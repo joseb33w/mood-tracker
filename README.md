@@ -4,7 +4,8 @@ A tiny, opinionated mood tracker.
 
 - 🔐 Email + password sign-in (Supabase Auth) — the main UI is gated behind login.
 - 😀 Five mood emoji to tap: Happy, Neutral, Sad, Angry, Tired.
-- 📅 Horizontal strip of the last 7 days showing the latest mood logged each day.
+- 📝 Optional note (up to 280 characters) attached to each mood log.
+- 📅 Horizontal strip of the last 7 days showing the latest mood logged each day — tap a day to expand a detail panel with the mood, time, and note.
 - ⚛️ Vite + React + Supabase, no backend code to deploy.
 
 ## Stack
@@ -22,6 +23,7 @@ CREATE TABLE IF NOT EXISTS public."<table-name>" (
   id uuid primary key default gen_random_uuid(),
   user_id text not null,
   mood text not null,
+  note text,
   created_at timestamptz not null default now()
 );
 
